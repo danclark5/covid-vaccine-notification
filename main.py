@@ -2,6 +2,7 @@ import requests
 import json
 import re
 import smtplib
+import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -24,16 +25,16 @@ def create_message(cfg):
     msg['Subject'] = 'COVID-19 Vaccines are available'
     return msg
 
-def send_message(cfg, msg, cvs_available, shoprite_available):
+def send_message(cfg, msg, cvs_available):
     msg_text = ""
     if cvs_available:
-        msg_text += f"Vaccines are available in CVS locations: {', '.join(cvs_available)}\n\n"
-    if shoprite_available:
-        shoprite_url = "https://reportsonline.queue-it.net/?c=reportsonline&e=shoprite&t_program=Immunizations"
-        msg_text += f"Vaccines are available at Shoprite. Check {shoprite_url} for more information."
+        msg_text += "Vaccines are available in CVS locations:<br/>"
+        msg_text += cvs_link_html()
+    for site, stats in cvs_available.items():
+        msg_text += cvs_site_html(site, stats)
 
 
-    msg.attach(MIMEText(msg_text, 'plain'))
+    msg.attach(MIMEText(msg_text, 'html'))
     msg_string = msg.as_string()
 
     session = smtplib.SMTP('smtp.gmail.com', 587)
@@ -42,30 +43,43 @@ def send_message(cfg, msg, cvs_available, shoprite_available):
     session.sendmail(cfg['sender_address'],cfg['recipients'], msg_string)
     session.quit()
 
-def scrap_cvs():
+def cvs_site_html(site, stats):
+    map_link = f"https://www.google.com/maps/place/{site},+NJ"
+    line = f"<a href='{map_link}'>{site}</a>:"
+    line += f" status: {stats['status']}<br/>"
+    return line
+
+def cvs_link_html():
+    link = "<a href='https://www.cvs.com/immunizations/covid-19-vaccine#'>Click here to register</a><br/>"
+    return link
+
+def scrape_cvs():
     cvs_url = "https://www.cvs.com/immunizations/covid-19-vaccine.vaccine-status.NJ.json?vaccineinfo"
     cvs_headers = {'Referer': 'https://www.cvs.com/immunizations/covid-19-vaccine'}
 
     cvs_response = requests.get(cvs_url, headers = cvs_headers)
     cvs_data = json.loads(cvs_response.text)
-    cvs_available = []
+    cvs_available = {}
 
     for record in cvs_data['responsePayloadData']['data']['NJ']:
-        if record['pctAvailable'] != '0.00%' or record['status'] != 'Fully Booked' or record['totalAvailable'] != '0':
-            cvs_available.append(record['city'])
+        print(record)
+        if record['status'] != 'Fully Booked':
+            stats = {
+                'status': record['status']
+                }
+            cvs_available[record['city']] = stats
     return cvs_available
 
-def scrap_shoprite():
-    shoprite_url = "https://reportsonline.queue-it.net/?c=reportsonline&e=shoprite&t_program=Immunizations"
-    shoprite_response = requests.get(shoprite_url)
-    return not(bool(re.search("There are currently no COVID-19 vaccine appointments available.", shoprite_response.text)))
+def current_date():
+    return datetime.datetime.now().strftime('%x %X')
 
 if __name__ == "__main__":
+    print (f"Started: {current_date()}")
     cfg = get_configs()
     msg = create_message(cfg)
-    shoprite_available = scrap_shoprite()
-    cvs_available = scrap_cvs()
-    print(f"CVS Availaibility: {cvs_available}, Shoprite Availability: {shoprite_available}")
-    
-    if(cvs_available or shoprite_available):
-        send_message(cfg, msg, cvs_available, shoprite_available)
+    cvs_available = scrape_cvs()
+
+    if(cvs_available):
+        send_message(cfg, msg, cvs_available)
+    else:
+        print("None available at CVS")
